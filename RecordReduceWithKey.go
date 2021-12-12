@@ -9,15 +9,9 @@ import (
 	"strings"
 )
 
-func reflectKeyExists(v *reflect.Value, keyValue *reflect.Value) *reflect.Value {
+func reflectKeyExists(v *reflect.Value, keyValue *reflect.Value) bool {
 	// Check if key exists
-	for _, currentKey := range v.MapKeys() {
-		if (currentKey.Kind() == reflect.Int && keyValue.Kind() == reflect.Int && keyValue.Int() == currentKey.Int()) ||
-			(currentKey.Kind() == reflect.String && keyValue.Kind() == reflect.String && keyValue.String() == currentKey.String()) {
-			return &currentKey
-		}
-	}
-	return nil
+	return v.MapIndex(*keyValue).IsValid()
 }
 
 /*
@@ -60,18 +54,20 @@ func RecordReduceWithKey[T any, Out any](records []T, outputRecord *Out, indexin
 				return errors.New("output is not a map")
 			}
 
+			// Validate map key type and T type
+			if currentLevel.Type().Key().Kind() != tPropKind {
+				return errors.New("Key datatype does not match for " + currentLevel.Type().String() + ", got " + tPropKind.String())
+			}
+
 			// Check if key exists
-			var found *reflect.Value = reflectKeyExists(&currentLevel, &tPropValue)
+			found := reflectKeyExists(&currentLevel, &tPropValue)
 
 			// Create key if key does not exist
-			if found == nil && len(indexing) != i+1 {
+			if !found && len(indexing) != i+1 {
 				if currentLevel.Type().Elem().Kind() == reflect.Map {
 					nextMapType := currentLevel.Type().Elem()
-					if tPropKind != currentLevel.Type().Key().Kind() {
-						return errors.New("Key datatype does not match for map[" + currentLevel.Type().Key().Kind().String() + "]" + currentLevel.Type().Elem().Kind().String() + ", got " + tPropKind.String())
-					}
 					currentLevel.SetMapIndex(tPropValue, reflect.MakeMap(nextMapType))
-					found = reflectKeyExists(&currentLevel, &tPropValue)
+					found = true
 				} else {
 					return errors.New("cannot create new map for next level. There is/are " + strconv.Itoa(len(indexing)) + " indexing key(s), therefore should have the same amount of map(s)")
 				}
@@ -85,16 +81,14 @@ func RecordReduceWithKey[T any, Out any](records []T, outputRecord *Out, indexin
 				}
 
 				if currentLevel.Type().Elem().Kind() == reflect.Slice {
-					found = reflectKeyExists(&currentLevel, &tPropValue)
-
-					if found == nil {
+					if !found {
 						nextSliceType := currentLevel.Type().Elem()
 						if reflect.TypeOf(record) != nextSliceType.Elem() {
 							return errors.New("cannot assign slice's value of datatype " + nextSliceType.Elem().String() + " for record of type " + reflect.TypeOf(record).String())
 						}
 						currentLevel.SetMapIndex(tPropValue, reflect.Append(reflect.MakeSlice(nextSliceType, 0, 0), reflect.ValueOf(record)))
 					} else {
-						currentLevel.SetMapIndex(tPropValue, reflect.Append(currentLevel.MapIndex(*found), reflect.ValueOf(record)))
+						currentLevel.SetMapIndex(tPropValue, reflect.Append(currentLevel.MapIndex(tPropValue), reflect.ValueOf(record)))
 					}
 				} else {
 					if reflect.TypeOf(record) != currentLevel.Type().Elem() {
@@ -105,8 +99,8 @@ func RecordReduceWithKey[T any, Out any](records []T, outputRecord *Out, indexin
 			}
 
 			// Update currentLevel
-			if found != nil {
-				currentLevel = currentLevel.MapIndex(*found)
+			if found {
+				currentLevel = currentLevel.MapIndex(tPropValue)
 			}
 		}
 	}
